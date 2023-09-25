@@ -1,0 +1,3 @@
+To fully understand the yolov3, I debugged it using gdb. learned a lot.
+I am desiging a different deep learning network using c functions here.
+it is architecture level change.

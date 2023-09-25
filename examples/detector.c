@@ -11,7 +11,13 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
 
     srand(time(0));
     char *base = basecfg(cfgfile);
-    printf("%s\n", base);
+    
+    //orig:
+    //printf("%s\n", base);
+    //mine: make it easy to see in output screen
+    printf("\n\n\n                loading network structure: %s\n\n\n", base);
+    //mine finished
+    
     float avg_loss = -1;
     network **nets = calloc(ngpus, sizeof(network));
 
@@ -19,6 +25,7 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
     int seed = rand();
     int i;
     for(i = 0; i < ngpus; ++i){
+    	//every gpu would have a full set of network, so nets would have networs across for each gpu
         srand(seed);
 #ifdef GPU
         cuda_set_device(gpus[i]);
@@ -27,13 +34,23 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
         nets[i]->learning_rate *= ngpus;
     }
     srand(time(0));
-    network *net = nets[0];
+    network *net = nets[0]; //use first network of all nets (they are all same setting net)
 
-    int imgs = net->batch * net->subdivisions * ngpus;
+    //some training parameter for network in first gpu
+    int imgs = net->batch * net->subdivisions * ngpus;  //number of images per batch
     printf("Learning Rate: %g, Momentum: %g, Decay: %g\n", net->learning_rate, net->momentum, net->decay);
+    //mine
+    printf("                network structure loading finished.\n\n\n");
+    //mine finished
+    
+    //----------------------------
+    //loading training data
+    //----------------------------
+    printf("\n\n\n                loading training data: \n\n\n");
+    
     data train, buffer;
 
-    layer l = net->layers[net->n - 1];
+    layer l = net->layers[net->n - 1]; //this is last layer, normally it is yolo_layer.c
 
     int classes = l.classes;
     float jitter = l.jitter;
@@ -44,16 +61,19 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
 
     load_args args = get_base_args(net);
     args.coords = l.coords;
-    args.paths = paths;
-    args.n = imgs;
-    args.m = plist->size;
+    args.paths = paths; //load x-y file to args.paths
+    args.n = imgs; //number of images per batch
+    args.m = plist->size; //tell args.m the total number of training set
     args.classes = classes;
     args.jitter = jitter;
-    args.num_boxes = l.max_boxes;
+    args.num_boxes = l.max_boxes; //tell args.num_boxes the max number of objects yolo would detect, i.e. 90
     args.d = &buffer;
     args.type = DETECTION_DATA;
     //args.type = INSTANCE_DATA;
-    args.threads = 64;
+    args.threads = 64; //64 p_threads in one go??
+    //so far, args has all training data information, e.g. image location,
+    //and from image location (X location), we can get y location (in yolo, y is a file)
+
 
     pthread_t load_thread = load_data(args);
     double time;
@@ -61,9 +81,12 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
     //while(i*imgs < N*120){
     while(get_current_batch(net) < net->max_batches){
         if(l.random && count++%10 == 0){
-            printf("Resizing\n");
+            printf("why shaping the all layers again here (should not call as resizing)\n");
+            //printf("Resizing\n"); //here is to setup shape of each layer, should not be called as resizing at all //how to resize image to 608*608 ??
             int dim = (rand() % 10 + 10) * 32;
-            if (get_current_batch(net)+200 > net->max_batches) dim = 608;
+            if (get_current_batch(net)+200 > net->max_batches) {
+                dim = 608;
+            }    
             //int dim = (rand() % 4 + 16) * 32;
             printf("%d\n", dim);
             args.w = dim;
@@ -76,7 +99,7 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
 
             #pragma omp parallel for
             for(i = 0; i < ngpus; ++i){
-                resize_network(nets[i], dim, dim);
+                resize_network(nets[i], dim, dim); //here should be named as setup shape of network layer one by one
             }
             net = nets[0];
         }
@@ -85,31 +108,73 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
         train = buffer;
         load_thread = load_data(args);
 
+        //mine: uncommeted  
+        //working now
         /*
+           printf("------mine: l.max_boxes:%d\n", l.max_boxes); 
            int k;
-           for(k = 0; k < l.max_boxes; ++k){
-           box b = float_to_box(train.y.vals[10] + 1 + k*5);
-           if(!b.x) break;
-           printf("loaded: %f %f %f %f\n", b.x, b.y, b.w, b.h);
+           for(k = 0; k < l.max_boxes; ++k){ //l.max_boxes is 90 for max object slots
+               printf("------mine: box number: k:%d\n",k);
+               //box b = float_to_box(train.y.vals[10] + 1 + k*5, 1);
+               //box b = float_to_box(train.y.vals[0] + k*(4+1) + get_current_batch(net)*l.truths, 1);
+               box b = float_to_box(train.y.vals[0] + k*(4+1), 1);
+               if(!b.x) break;
+               printf("------mine: train.y loaded: %f %f %f %f\n", b.x, b.y, b.w, b.h);
            }
-         */
-        /*
+        
+        
+        
            int zz;
-           for(zz = 0; zz < train.X.cols; ++zz){
-           image im = float_to_image(net->w, net->h, 3, train.X.vals[zz]);
-           int k;
-           for(k = 0; k < l.max_boxes; ++k){
-           box b = float_to_box(train.y.vals[zz] + k*5, 1);
-           printf("%f %f %f %f\n", b.x, b.y, b.w, b.h);
-           draw_bbox(im, b, 1, 1,0,0);
+           //printf("------mine: pic name %s\n",paths[0]);
+           char* z_picName=paths[0];
+           printf("------mine: z_picName %s\n",z_picName);
+           
+           printf("mine: train.X.cols:%d\n",train.X.cols);
+           //for(zz = 0; zz < train.X.cols; ++zz){ //orig must be wrong, train.X.cols is too big
+           for(zz = 0; zz < train.X.rows; ++zz){
+               printf("mine: zz: %d\n",zz);
+               image im = float_to_image(net->w, net->h, 3, train.X.vals[zz]);
+               int k;
+               for(k = 0; k < l.max_boxes; ++k){ //90 object slots, each slot has 5 kind of bits for box position
+                   box b = float_to_box(train.y.vals[zz] + k*5, 1);
+                   //printf("mine: train.X loaded: train.y box from 1 to 90 (l.max_boxes): box no.%d :  %f %f %f %f\n", k, b.x, b.y, b.w, b.h);
+                   draw_bbox(im, b, 1, 1, 0, 0);
+               }
+               
+               //string concatenate in c
+               char z_resultName[200];
+               //strcpy(z_resultName,"truth11.");
+               //printf("------mine: z_resultName %s\n",z_resultName);
+               //strcat(z_resultName,z_picName);
+               strcpy(z_resultName,z_picName);
+               printf("------mine: z_resultName %s\n",z_resultName);
+               
+               //substring in c 
+               //z_resultName_forSaving=f(z_resultName);
+               
+               //---test 1:
+               //char z_resultName_forSaving_test[6]="hello";
+               //printf("------mine: z_resultName_forSaving_test: %s\n",z_resultName_forSaving_test);
+               //---method 1:
+               //char z_resultName_forSaving[6];
+               //strncpy(z_resultName_forSaving, z_resultName, 5);
+               //z_resultName_forSaving[5] = '\0'; // place the null terminator
+               //printf("------mine: z_resultName_forSaving: %s\n",z_resultName_forSaving);
+               //---method 2:
+               int z_len=strlen(z_resultName);
+               char * z_resultName_forSaving=&z_resultName[z_len-10];
+               strcat(z_resultName_forSaving,".truth11");
+               printf("------mine: z_resultName_forSaving: %s\n",z_resultName_forSaving);
+               
+               //show_image(im, "truth11", 1);
+               show_image(im, z_resultName, 1);
+               cvWaitKey(0);
+               //save_image(im, "truth11");
+               save_image(im, z_resultName_forSaving);
            }
-           show_image(im, "truth11");
-           cvWaitKey(0);
-           save_image(im, "truth11");
-           }
-         */
+        */ 
 
-        printf("Loaded: %lf seconds\n", what_time_is_it_now()-time);
+        printf("\n\nLoaded: %lf seconds\n", what_time_is_it_now()-time);
 
         time=what_time_is_it_now();
         float loss = 0;
@@ -126,7 +191,7 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
         avg_loss = avg_loss*.9 + loss*.1;
 
         i = get_current_batch(net);
-        printf("%ld: %f, %f avg, %f rate, %lf seconds, %d images\n", get_current_batch(net), loss, avg_loss, get_current_rate(net), what_time_is_it_now()-time, i*imgs);
+        printf("batch %ld result: %f, %f avg, %f rate, %lf seconds, %d images\n", get_current_batch(net), loss, avg_loss, get_current_rate(net), what_time_is_it_now()-time, i*imgs);
         if(i%100==0){
 #ifdef GPU
             if(ngpus != 1) sync_nets(nets, ngpus, 0);
@@ -595,10 +660,15 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
         float *X = sized.data;
         time=what_time_is_it_now();
         network_predict(net, X);
-        printf("%s: Predicted in %f seconds.\n", input, what_time_is_it_now()-time);
+        //orig:
+	//printf("%s: Predicted in %f seconds.\n", input, what_time_is_it_now()-time);
+        //mine:
+	printf("mine: hello, %s: Predicted in %f seconds.\n", input, what_time_is_it_now()-time);
+	printf("mine: hello, input is: %s \n", input);
         int nboxes = 0;
         detection *dets = get_network_boxes(net, im.w, im.h, thresh, hier_thresh, 0, 1, &nboxes);
-        //printf("%d\n", nboxes);
+        //mine: uncomment orig: printf("%d\n", nboxes);
+        printf("mine: nboxes: %d\n", nboxes);
         //if (nms) do_nms_obj(boxes, probs, l.w*l.h*l.n, l.classes, nms);
         if (nms) do_nms_sort(dets, nboxes, l.classes, nms);
         draw_detections(im, dets, nboxes, thresh, names, alphabet, l.classes);
